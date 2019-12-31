@@ -47,4 +47,4 @@ the transmitted messages.
 [scapy]: http://www.secdev.org/projects/scapy/
 [numpy]: http://www.numpy.org/
 [FlexNet]: https://en.wikipedia.org/wiki/FlexNet_Publisher
-[Netzob]: https://www.netzob.org/
+[Netzob]: https://github.com/netzob/netzob

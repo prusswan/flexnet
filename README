@@ -1,3 +1,6 @@
+#Originally branched from https://github.com/ressy/flexnet
+
+#Must be in python2.7 environment. Check https://github.com/ressy/flexnet/issues/2
 module load anaconda/5.0.1
 source activate flexnet_py27
 
@@ -13,3 +16,13 @@ Change: import StringIO
 To:     from io import StringIO
 
 ./test.py
+# It is not working at this moment for parsing server reponse though:
+# Traceback (most recent call last):
+#   File "./test.py", line 9, in <module>
+#   c.query_everything()
+#   File ".../flexnet_lliu/flexnet/flexnet/client.py", line 330, in query_everything
+#   self.query_vendor_details()
+#   File ".../flexnet_lliu/flexnet/flexnet/client.py", line 415, in query_vendor_details
+#   vendors[vendor_name]["hostname"] = msg["vendor_hostname"]
+#   KeyError: 'vendor_hostname'
+#

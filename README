@@ -1,0 +1,15 @@
+module load anaconda/5.0.1
+source activate flexnet_py27
+
+# if pycrc is not found. check https://github.com/ressy/flexnet/issues/1
+git clone https://github.com/ressy/flexnet.git
+wget https://pycrc.org/download/pycrc-0.9.tar.gz
+tar xzvf pycrc-0.9.tar.gz
+PYTHONPATH=pycrc-0.9 python -c 'import flexnet' # no errors, hopefully?
+
+# If StringIO is not found. For Python3 (not needed for Python2.7)
+modify flexnet/file.py
+Change: import StringIO
+To:     from io import StringIO
+
+./test.py

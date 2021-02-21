@@ -1,7 +1,10 @@
 """FlexNet text configuration file."""
 
 import re
-import StringIO
+try:
+    from StringIO import StringIO
+except ImportError:
+    from io import StringIO
 import shlex
 
 # http://media.3ds.com/support/simulia/public/flexlm108/EndUser/chap10.htm
@@ -13,7 +16,7 @@ FLEXNET_LINES = ["USE_SERVER",
                  "INCREMENT",
                  "FEATURE",
                  "UPGRADE",
-                 "PACKAGE"] 
+                 "PACKAGE"]
 
 def flexnet_parse(text):
     lines = _flexnet_lex(text)
@@ -27,7 +30,7 @@ def _flexnet_lex(text):
     for line in text.split('\n'):
         line = re.sub(r'\s+', ' ', line)
         lines.append([])
-        str_file = StringIO.StringIO(line)
+        str_file = StringIO(line)
         lex = shlex.shlex(str_file)
         lex.wordchars += ".,-/:;+^"
         token = lex.get_token()
@@ -67,7 +70,7 @@ def _flexnet_parse(lines):
             lic['expdate']  = line[4]
             if line[5] == 'uncounted':
                 lic['quantity'] = 0
-            else: 
+            else:
                 lic['quantity'] = int(line[5])
             # NOTE: The parsing gets too easily confused with the extra entries
             opts = line[6:]

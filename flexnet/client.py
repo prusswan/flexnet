@@ -12,6 +12,7 @@ import binascii
 import re
 import copy
 import pycrc
+# from pycrc import algorithms as pycrc
 
 import flexnet.file
 
@@ -45,16 +46,17 @@ crc = pycrc.Crc(width=CRCWIDTH, poly=CRCPOLY, reflect_in=True, xor_in=0, reflect
 class _Client(object):
     """Base class for both server types"""
 
-    def __init__(self, server, port=None):
+    def __init__(self, server, port=None, debug=False, verbose=False, single_server=False):
         if port is None:
             port, server = server.split('@')
             port = int(port)
 
         self.server   = server # server hostname for TCP connections
         self.port     = port   # server port number for TCP connections
-        self.debug    = False  # show raw binary sent and received
-        self.verbose  = False  # show parsed messages received
+        self.debug    = debug  # show raw binary sent and received
+        self.verbose  = verbose  # show parsed messages received
         self.oldproto = None   # will be set later if server version < VER_NEW
+        self.single_server = single_server # if true, use the main server for all queries
 
         self.user    = os.environ.get('USER') or ''
         self.host    = socket.gethostname()
@@ -72,6 +74,7 @@ class _Client(object):
         """Open TCP connection to self.server at self.port"""
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.settimeout(10)
+        print("connecting to:", self.server, self.port)
         self.s.connect((self.server, self.port))
 
     def close(self):
@@ -97,14 +100,15 @@ class _Client(object):
 
         ver = struct.pack("BB", *self.version)
         num = '78\x0014\x00' # ???
-        req = ''.join([d+'\x00' for d in data]) + ver + num
+        # print(type(ver), type(num))
+        req = ''.join([d+'\x00' for d in data]) + ver.decode('latin1') + num
 
         cb = sum(map(ord, req[:len(req)-2]))%256
         prefix = struct.pack('4B', 0x68, # ???
                                    cb,
                                    0x31, # ???
                                    0x33) # ???
-        req = prefix + req
+        req = prefix.decode('latin1') + req
         return req
 
     # TODO many of these response types only occur for certain requests.
@@ -128,7 +132,9 @@ class _Client(object):
 
         # response to a hello() request
         elif header.get("type") == TYPE_HELLO:
-            txt = response[header["len"]:].strip('\x00').split('\x00')
+            # print(type(header), type(header["len"]), type(response), type('\x00'))
+            txt = response[header["len"]:].decode('latin1').strip('\x00').split('\x00')
+            print("txt", txt)
             message["hostname"]        = txt[0]
             message["daemon"]          = txt[1]
             message["server_version"]  = header["srv_ver"]
@@ -142,18 +148,18 @@ class _Client(object):
         # port and possibly a different host altogether.  This follows a
         # hello() with a vendor specified.
         elif header.get("type") == TYPE_STUBR:
-            payload = response[header["len"]:]
+            payload = response[header["len"]:].decode('latin1')
             hostname, remainder = payload.split('\x00', 1)
-            message["vendor_hostname"] = hostname
-            message["vendor_port"], = struct.unpack('!L', remainder[:4])
+            message["vendor_hostname"] = self.server if self.single_server else hostname
+            message["vendor_port"], = struct.unpack('!L', remainder[:4].encode('latin1'))
 
         # Response to request for license sets?
         elif header.get("type") == TYPE_STUB2:
             # The "text" is interspersed with runs of NULLs and 0x01 and 0x07.
             # No idea what that means.
-            txt = response[header["len"]:]
+            txt = response[header["len"]:].decode('latin1')
             strip_binary = lambda x: x.strip('\x01\x07')
-            fields = filter(len, map(strip_binary, txt.split('\x00')))
+            fields = list(filter(len, map(strip_binary, txt.split('\x00'))))
             message["text"] = fields
 
         # Response to license status request.
@@ -162,7 +168,7 @@ class _Client(object):
             # mysterious 2-byte prefix, followed by ASCII integers for number
             # used, number in total, and a timestamp.
             prefix    = struct.unpack('BB', payload[0:2])
-            fields = filter(len, payload[2:].split('\x00'))
+            fields = list(filter(len, payload[2:].decode('latin1').split('\x00')))
             used      = fields[0]
             total     = fields[1]
             timestamp = fields[2]
@@ -174,7 +180,7 @@ class _Client(object):
         # Response showing license usage following a license status request.
         # One response per group reservation/user chckout for that license.
         elif header.get("type") == TYPE_REQLIC2:
-            segments = response[header["len"]:].split('\x01',1)
+            segments = response[header["len"]:].decode('latin1').split('\x01',1)
             # null-terminated strings
             txtfields = segments[0].split('\x00')
             # group reservations are handled separately.  They have an extra
@@ -195,8 +201,10 @@ class _Client(object):
                 message["number"], = struct.unpack('!Q', number)
 
         else:
-            txt = response[header["len"]:].strip('\x00').split('\x00')
-            fields = filter(len, txt)
+            if header.get("type") != TYPE_RESP:
+                print("unknown header type:", header.get("type"), type(header.get("type")))
+            txt = response[header["len"]:].decode('latin1').strip('\x00').split('\x00')
+            fields = list(filter(len, txt))
             message["text"] = fields
 
         if self.verbose:
@@ -222,30 +230,40 @@ class _Client(object):
                 reqlen,
                 reqtype,
                 timestamp)
-        header = header.ljust(16, '\x00')
+        header = header.decode('latin1').ljust(16, '\x00')
+        # print("header, data", type(header), type(data))
 
-        return chr(0x2f) + self._checkbytes(header+data) + header
-    
+        return chr(0x2f) + self._checkbytes((header+data).encode('latin1')).decode('latin1') + header
+
     def _checkbytes(self, data):
         # CRC is packed in 2 bytes, big-endian
-        crc_val = crc.table_driven(map(ord, data))
+        data_str = data.decode('latin1')
+        crc_val = crc.table_driven(list(map(ord, data_str)))
         crc_str = struct.pack("!H", crc_val)
         # check byte is a modular sum of of the header data
-        cb = (sum(map(ord, crc_str + data[:16]))+47)%256
-        return chr(cb) + crc_str
+        #cb = (sum(map(ord, crc_str + data[:16]))+47)%256
+        # s = sum(map(ord, map(chr, crc_str + data[:16]))) # also works
+        s = sum(map(ord, (crc_str + data[:16]).decode('latin1')))
+        cb = (s+47)%256
+        if self.debug:
+            print("checkbytes", type(data), len(data))
+            print(s, cb)
+        return (chr(cb) + crc_str.decode('latin1')).encode('latin1')
 
     def _header_parse(self, data):
         header = {}
-        header["prefix"],   = struct.unpack('B', data[0])
+        # print("data[0]", type(data[0]))
+        header["prefix"],   = struct.unpack('B', data[0:1])
         if header["prefix"] == 0x4c:
             return header
         if header["prefix"] == 0x4e:
             header["len"] = 2
             return header
-        header["checksum"], = struct.unpack('B', data[1])
+        header["checksum"], = struct.unpack('B', data[0:1])
         header["crc"],      = struct.unpack('!H', data[2:4])
         header["msg_len"],  = struct.unpack('!H', data[4:6])
         header["type"],     = struct.unpack('!H', data[6:8])
+        print("header type parsed:", hex(header["type"]), type(header["type"]))
         header["len"] = HEADERLENS[header["type"]]
         if header["type"] == TYPE_HELLO:
             header["token"],  = struct.unpack('!L', data[8:12])
@@ -267,14 +285,19 @@ class _Client(object):
             check = binascii.hexlify(check)
             actual = binascii.hexlify(data[1:4])
             raise ValueError("Header prefix expected to be 0x%s, but got 0x%s" % (check, actual))
+        else:
+            if self.debug:
+                print("Header prefix: 0x%s" % binascii.hexlify(check))
 
     def _query(self, request=None):
         if request:
             if self.debug:
-                sys.stderr.write("Request: %s\n" % binascii.hexlify(request))
-            self.s.sendall(request)
+                sys.stderr.write("Request: %s\n" % binascii.hexlify(request.encode('latin1')))
+            print("request str:", request)
+            self.s.sendall(request.encode('latin1'))
         response = self.s.recv(1)
-        prefix = ord(response[0])
+        #print("response", type(response), response)
+        prefix = ord(chr(response[0]))
         if prefix not in PREFIXES:
             raise Exception("Unexpected response prefix %s" % hex(prefix))
         ### Older versions, data chunked in 147-byte segments
@@ -313,8 +336,8 @@ class ManagerClient(_Client):
     This will follow redirects to managers running on other hosts if necessary.
     """
 
-    def __init__(self, server, port=None):
-        super(ManagerClient, self).__init__(server, port)
+    def __init__(self, server, port=None, debug=False, verbose=False, single_server=False):
+        super(ManagerClient, self).__init__(server, port, debug, verbose, single_server)
         self.vendors = [] # Vendor daemon connections via VendorClient()
         # TODO turn these into real attributes
         self.server_params = {}
@@ -363,15 +386,17 @@ class ManagerClient(_Client):
     def query_server(self):
         """Make initial connection and query license manager details"""
         msg = self.hello()
-        self.server_params["server_hostname"] = msg["hostname"]
-        self.server_params["server_daemon"]   = msg["daemon"]
-        self.server_params["server_version"]  = msg["server_version"]
+        print(msg)
+        if "hostname" in msg:       self.server_params["server_hostname"] = msg["hostname"]
+        if "daemon" in msg:         self.server_params["server_daemon"]   = msg["daemon"]
+        if "server_version" in msg: self.server_params["server_version"]  = msg["server_version"]
         # For standalone managers that's all we need, but for redundant
         # managers it might be directing us to a different server entirely.
         # Either way just re-connecting with the specified hostname should
         # work.
         self.close()
-        self.server = msg["hostname"]
+        if not self.single_server:
+            if "hostname" in msg: self.server = msg["hostname"]
         self.connect()
         self.hello()
 
@@ -490,12 +515,12 @@ class VendorClient(_Client):
         msg = self._stub(data='\x01\x00\x00\x00\x00', reqtype=TYPE_LICSET)
         # Sometimes this will have a garbage whitespace entry.
         # Remove those before continuing.
-        msg["text"] = filter(lambda x: not re.match('^\s*$', x), msg["text"])
-        num = len(msg["text"])/8
+        msg["text"] = list(filter(lambda x: not re.match('^\s*$', x), msg["text"]))
+        num = len(msg["text"])//8
         license_sets =[{} for x in range(num)]
         keys = ["fid", "sig", "names", "date1", "date2", "fid", "url", "license_text"]
         for i in range(len(msg["text"])):
-            lic = license_sets[i/8]
+            lic = license_sets[i//8]
             lic[keys[i%8]] = msg["text"][i]
         self.license_sets.extend([flexnet.licenses.LicenseSet(lic) for lic in license_sets])
         return license_sets
